@@ -1,0 +1,32 @@
+# Render Blueprint. Replace the two service URLs below after first deploy.
+databases:
+  - name: deployflow-db
+    databaseName: deployflow
+    plan: free
+
+services:
+  - type: web
+    name: deployflow-backend
+    runtime: docker
+    rootDir: backend
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: deployflow-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        value: https://deployflow-frontend.onrender.com
+
+  - type: web
+    name: deployflow-frontend
+    runtime: docker
+    rootDir: frontend
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: "4173"
+      - key: VITE_API_URL
+        value: https://deployflow-backend.onrender.com

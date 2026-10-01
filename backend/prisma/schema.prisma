@@ -1,0 +1,271 @@
+// DeployFlow data model — PostgreSQL.
+// Local dev: run `docker compose up db -d` (or point DATABASE_URL at any
+// Postgres instance — Neon, Render Postgres, a local install). See README.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  DEVELOPER
+  VIEWER
+}
+
+enum EnvironmentType {
+  DEVELOPMENT
+  STAGING
+  PRODUCTION
+}
+
+enum RunStatus {
+  WAITING
+  RUNNING
+  PASSED
+  FAILED
+}
+
+enum StageStatus {
+  WAITING
+  RUNNING
+  PASSED
+  FAILED
+  SKIPPED
+}
+
+enum LogLevel {
+  INFO
+  WARNING
+  ERROR
+  SUCCESS
+}
+
+enum BuildStatus {
+  PASSED
+  FAILED
+}
+
+enum DeploymentStatus {
+  DEPLOYING
+  LIVE
+  SUPERSEDED
+  FAILED
+  ROLLED_BACK
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users    User[]
+  projects Project[]
+}
+
+model User {
+  id             String   @id @default(cuid())
+  name           String
+  email          String   @unique
+  passwordHash   String
+  role           Role     @default(DEVELOPER)
+  organizationId String
+  createdAt      DateTime @default(now())
+
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  activityEvents ActivityEvent[]
+
+  @@index([organizationId])
+}
+
+model Project {
+  id             String   @id @default(cuid())
+  name           String
+  description    String   @default("")
+  repoOwner      String
+  repoName       String
+  defaultBranch  String   @default("main")
+  organizationId String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  environments         Environment[]
+  pipelineRuns         PipelineRun[]
+  builds               Build[]
+  deployments          Deployment[]
+  registryImages       RegistryImage[]
+  healthChecks         HealthCheck[]
+  environmentVariables EnvironmentVariable[]
+
+  @@index([organizationId])
+}
+
+model Environment {
+  id             String          @id @default(cuid())
+  name           String
+  type           EnvironmentType
+  branch         String
+  url            String?
+  autoDeploy     Boolean         @default(false)
+  currentVersion String?
+  projectId      String
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  deployments  Deployment[]
+  healthChecks HealthCheck[]
+
+  @@index([projectId])
+}
+
+model PipelineRun {
+  id         String    @id @default(cuid())
+  number     Int
+  commitSha  String
+  commitMsg  String    @default("Manual pipeline trigger")
+  branch     String    @default("main")
+  author     String    @default("demo-user")
+  trigger    String    @default("MANUAL")
+  status     RunStatus @default(WAITING)
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  projectId  String
+
+  project    Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stages     PipelineStage[]
+  build      Build?
+  deployment Deployment?
+
+  @@index([projectId])
+}
+
+model PipelineStage {
+  id            String      @id @default(cuid())
+  name          String
+  order         Int
+  status        StageStatus @default(WAITING)
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  durationMs    Int?
+  errorMessage  String?
+  pipelineRunId String
+
+  pipelineRun PipelineRun @relation(fields: [pipelineRunId], references: [id], onDelete: Cascade)
+  logs        LogEntry[]
+
+  @@index([pipelineRunId])
+}
+
+model LogEntry {
+  id              String   @id @default(cuid())
+  level           LogLevel @default(INFO)
+  message         String
+  service         String   @default("pipeline")
+  timestamp       DateTime @default(now())
+  pipelineStageId String
+
+  pipelineStage PipelineStage @relation(fields: [pipelineStageId], references: [id], onDelete: Cascade)
+
+  @@index([pipelineStageId])
+}
+
+model Build {
+  id            String      @id @default(cuid())
+  number        Int
+  commitSha     String
+  branch        String
+  author        String
+  trigger       String      @default("MANUAL")
+  status        BuildStatus
+  durationMs    Int?
+  imageTag      String?
+  createdAt     DateTime    @default(now())
+  projectId     String
+  pipelineRunId String      @unique
+
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pipelineRun PipelineRun @relation(fields: [pipelineRunId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model RegistryImage {
+  id         String   @id @default(cuid())
+  repository String
+  tag        String
+  digest     String
+  sizeMb     Int
+  createdAt  DateTime @default(now())
+  projectId  String
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model Deployment {
+  id            String           @id @default(cuid())
+  version       String
+  commitSha     String
+  status        DeploymentStatus @default(LIVE)
+  durationMs    Int?
+  rolledBackTo  String?
+  createdAt     DateTime         @default(now())
+  projectId     String
+  environmentId String
+  pipelineRunId String?          @unique
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  environment Environment  @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+  pipelineRun PipelineRun? @relation(fields: [pipelineRunId], references: [id])
+
+  @@index([projectId])
+  @@index([environmentId])
+}
+
+model HealthCheck {
+  id             String   @id @default(cuid())
+  url            String
+  healthy        Boolean
+  httpStatus     Int
+  responseTimeMs Int
+  checkedAt      DateTime @default(now())
+  projectId      String
+  environmentId  String
+
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  environment Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([environmentId])
+}
+
+model EnvironmentVariable {
+  id            String   @id @default(cuid())
+  key           String
+  value         String
+  isSecret      Boolean  @default(false)
+  environmentId String?
+  createdAt     DateTime @default(now())
+  projectId     String
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model ActivityEvent {
+  id        String   @id @default(cuid())
+  action    String
+  resource  String
+  result    String   @default("success")
+  timestamp DateTime @default(now())
+  userId    String
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
